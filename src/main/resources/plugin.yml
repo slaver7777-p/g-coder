@@ -1,0 +1,11 @@
+name: CosHolograms
+version: '1.0'
+main: cosinus.slava7777.CosHolograms
+api-version: '1.20'
+authors: [ slava7777 ]
+depend:
+  - ProtocolLib
+  - PlaceholderAPI
+
+commands:
+  createhologram: {}
