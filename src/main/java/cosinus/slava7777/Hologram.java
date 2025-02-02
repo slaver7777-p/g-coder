@@ -7,10 +7,13 @@ import net.kyori.adventure.text.minimessage.MiniMessage;
 import org.bukkit.Bukkit;
 import org.bukkit.Color;
 import org.bukkit.Location;
+import org.bukkit.Material;
 import org.bukkit.entity.Display;
+import org.bukkit.entity.ItemDisplay;
 import org.bukkit.entity.Player;
 import org.bukkit.entity.TextDisplay;
 import org.bukkit.event.Listener;
+import org.bukkit.inventory.ItemStack;
 import org.bukkit.scheduler.BukkitRunnable;
 import org.jetbrains.annotations.Nullable;
 import org.joml.Matrix4f;
@@ -18,7 +21,6 @@ import org.joml.Vector3f;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Objects;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -27,42 +29,25 @@ public class Hologram implements Listener {
     private final CosHolograms plugin;
     private final String name;
     private final Location location;
-    private final List<String> lines;
+    private final List<Line> lines;
     private final double visibilityDistance;
-    private final double lineSpacing;
-    private final String backgroundColor;
     private final int brightness;
-    private final String billboardType;
-    private final boolean textShadow;
-    private final String textType;
-    private Vector3f scale;
     private List<TextDisplay> displays;
     private final AnimationManager animationManager;
+    private List<ItemDisplay> itemDisplays;
 
     public Hologram(CosHolograms plugin,
                     String name,
                     Location location,
-                    List<String> lines,
+                    List<Line> lines,
                     double visibilityDistance,
-                    double lineSpacing,
-                    String backgroundColor,
-                    int brightness,
-                    String billboardType,
-                    Vector3f scale,
-                    boolean textShadow,
-                    String textType) {
+                    int brightness) {
         this.plugin = plugin;
         this.name = name;
         this.location = location;
         this.lines = lines;
         this.visibilityDistance = visibilityDistance;
-        this.lineSpacing = lineSpacing;
-        this.backgroundColor = backgroundColor;
         this.brightness = brightness;
-        this.billboardType = billboardType;
-        this.scale = scale;
-        this.textType = textType;
-        this.textShadow = textShadow;
         this.animationManager = new AnimationManager(plugin);
 
         setupDisplays();
@@ -70,30 +55,63 @@ public class Hologram implements Listener {
 
     private void setupDisplays() {
         displays = new ArrayList<>();
+        itemDisplays = new ArrayList<>();
         MiniMessage miniMessage = MiniMessage.miniMessage();
 
         for (int i = 0; i < lines.size(); i++) {
-            int finalI = i;
-            Location lineLocation = location.clone().add(0, -lineSpacing * i, 0);
+            Line line = lines.get(i);
+            Location lineLocation = location.clone().add(0, -line.lineSpacing() * i, 0);
+
+            // Обработка блоков и предметов
+            if (line.content().contains("<#BLOCK:")) {
+                String materialName = extractMaterialName(line.content(), "<#BLOCK:");
+                Material material = Material.getMaterial(materialName);
+                if (material == null) {
+                    material = Material.GOLDEN_APPLE;
+                }
+                if (material.isBlock()) {
+                    for (Player player : Bukkit.getOnlinePlayers()) {
+                        createBlockDisplay(lineLocation, material, player, line);
+                    }
+                    continue;
+                }
+            } else if (line.content().contains("<#ITEM:")) {
+                String materialName = extractMaterialName(line.content(), "<#ITEM:");
+                Material material = Material.getMaterial(materialName);
+                if (material == null) {
+                    material = Material.GOLDEN_APPLE;
+                }
+                for (Player player : Bukkit.getOnlinePlayers()) {
+                    createItemDisplay(lineLocation, material, player, line);
+                }
+                continue;
+            }
 
             // Создаем текст
             TextDisplay textDisplay = lineLocation.getWorld().spawn(lineLocation, TextDisplay.class, (d) -> {
                 for (Player player : Bukkit.getOnlinePlayers()) {
-                    String line = lines.get(finalI);
-                    line = PlaceholderAPI.setPlaceholders(player, line);
+                    String content = line.content();
+                    content = PlaceholderAPI.setPlaceholders(player, content);
 
-                    Matcher matcher = Pattern.compile("<#(.*?)>").matcher(line);
+                    // Обработка многострочных текстов с использованием \n
+                    String[] splitContent = content.split("\\\\n");
+                    Component combinedComponent = Component.text("");
+                    for (String part : splitContent) {
+                        Component component = miniMessage.deserialize(part);
+                        combinedComponent = combinedComponent.append(component).append(Component.newline());
+                    }
+
+                    Matcher matcher = Pattern.compile("<#(.*?)>").matcher(content);
                     if (matcher.find()) {
                         String animationName = matcher.group(1);
                         List<AnimationManager.AnimationFrame> animation = animationManager.getAnimation(animationName);
                         if (animation != null) {
-                            startAnimation(d, animation, player, line, matcher.start(), matcher.end());
+                            startAnimation(d, animation, player, content, matcher.start(), matcher.end(), line);
                         }
                     } else {
-                        Component component = miniMessage.deserialize(line);
-                        d.text(component);
+                        d.text(combinedComponent);
 
-                        configureTextDisplay(d);
+                        configureDisplay(d, line);
                     }
                 }
             });
@@ -105,30 +123,60 @@ public class Hologram implements Listener {
             public void run() {
                 for (Player player : Bukkit.getOnlinePlayers()) {
                     if (player.getLocation().distance(location) < visibilityDistance) {
-                        showDisplays(player); // Показываем голограммы
+                        showDisplays(player); // показывание голограммы
                     } else {
-                        hideDisplays(player); // Скрываем голограммы
+                        hideDisplays(player); // скрытие голограммы
                     }
                 }
             }
         }.runTaskTimer(plugin, 0L, 5L);
     }
 
-    private void configureTextDisplay(TextDisplay display) {
-        setTextAlignmentType(display, textType);
-        display.setGravity(false);
-        display.setVisibleByDefault(true);
-        display.setBrightness(new Display.Brightness(brightness, brightness));
-        setBackgroundColorWithAlpha(display, backgroundColor);
-        setBillboardType(display, billboardType);
-        setTextScale(display, scale);
-        setTextShadow(display, textShadow); // Устанавливаем тени для текста
-        display.setSeeThrough(true); // Видимость сквозь блоки
+    private void configureDisplay(Display display, Line line) {
+        setBillboardType(display, line.billboardType());
+        if (display instanceof TextDisplay textDisplay) {
+            setTextAlignmentType(textDisplay, line.textType());
+            textDisplay.setGravity(false);
+            textDisplay.setVisibleByDefault(true);
+            textDisplay.setBrightness(new Display.Brightness(brightness, brightness));
+            setBackgroundColorWithAlpha(textDisplay, line.backgroundColor());
+            textDisplay.setShadowed(line.textShadow());
+            textDisplay.setShadowRadius(0);
+            textDisplay.setSeeThrough(true); // Видить ли голограмму через блоки?
+        }
+        setTextScale(display, line.scale());
     }
 
+    private void createBlockDisplay(Location location, Material material, Player player, Line line) {
+        ItemStack itemStack = new ItemStack(material);
+        ItemDisplay display = location.getWorld().spawn(location, ItemDisplay.class, (d) -> {
+            d.setItemStack(itemStack);
+            setBillboardType(d, line.billboardType());
+            setTextScale(d, line.scale());
+        });
+        player.showEntity(plugin, display);
+        itemDisplays.add(display);
+    }
 
-    private void startAnimation(TextDisplay display, List<AnimationManager.AnimationFrame> animation, Player player, String originalLine, int start, int end) {
-        configureTextDisplay(display);
+    private void createItemDisplay(Location location, Material material, Player player, Line line) {
+        ItemStack itemStack = new ItemStack(material);
+        ItemDisplay display = location.getWorld().spawn(location, ItemDisplay.class, (d) -> {
+            d.setItemStack(itemStack);
+            setBillboardType(d, line.billboardType());
+            setTextScale(d, line.scale());
+        });
+        player.showEntity(plugin, display);
+        itemDisplays.add(display);
+    }
+
+    private String extractMaterialName(String content, String placeholder) {
+        int startIndex = content.indexOf(placeholder) + placeholder.length();
+        int endIndex = content.indexOf(">", startIndex);
+        return content.substring(startIndex, endIndex);
+    }
+
+    private void startAnimation(TextDisplay display, List<AnimationManager.AnimationFrame> animation, Player player, String originalLine, int start, int end, Line line) {
+        configureDisplay(display, line); // Assuming animation applies to the first line
 
         new BukkitRunnable() {
             int index = 0;
@@ -142,13 +190,34 @@ public class Hologram implements Listener {
                 String frameText = originalLine.substring(0, start) + frame.string() + originalLine.substring(end);
                 String parsedLine = PlaceholderAPI.setPlaceholders(player, frameText);
                 Component component = MiniMessage.miniMessage().deserialize(parsedLine);
-                display.text(component);
+
+                // Обработка блоков и предметов в анимациях
+                if (frame.string().contains("<#BLOCK:")) {
+                    String materialName = extractMaterialName(frame.string(), "<#BLOCK:");
+                    Material material = Material.getMaterial(materialName);
+                    if (material == null) {
+                        material = Material.GOLDEN_APPLE;
+                    }
+                    if (material.isBlock()) {
+                        createBlockDisplay(display.getLocation(), material, player, line);
+                    }
+                } else if (frame.string().contains("<#ITEM:")) {
+                    String materialName = extractMaterialName(frame.string(), "<#ITEM:");
+                    Material material = Material.getMaterial(materialName);
+                    if (material == null) {
+                        material = Material.GOLDEN_APPLE;
+                    }
+                    createItemDisplay(display.getLocation(), material, player, line);
+                } else {
+                    display.text(component);
+                }
+
                 index++;
             }
         }.runTaskTimer(plugin, 0L, animation.get(0).interval());
     }
 
-    private void setBillboardType(TextDisplay display, String type) {
+    private void setBillboardType(Display display, String type) {
         switch (type.toLowerCase()) {
             case "center":
                 display.setBillboard(Display.Billboard.CENTER);
@@ -162,36 +231,29 @@ public class Hologram implements Listener {
             case "fixed":
             default:
                 display.setBillboard(Display.Billboard.FIXED);
-                display.setSeeThrough(true); // Видимость сквозь блоки
+                if (display instanceof TextDisplay textDisplay) {
+                    textDisplay.setSeeThrough(true); // Видимость сквозь блоки
+                }
                 break;
         }
     }
-
 
     public void setTextAlignmentType(TextDisplay display, String type) {
         switch (type.toLowerCase()) {
             case "left":
                 display.setAlignment(TextDisplay.TextAlignment.LEFT);
                 break;
-
             case "right":
                 display.setAlignment(TextDisplay.TextAlignment.RIGHT);
                 break;
-
             case "center":
             default:
                 display.setAlignment(TextDisplay.TextAlignment.CENTER);
                 break;
         }
-
     }
 
-    public String getTextType () {
-        return textType;
-    }
-
-    private void setTextScale(TextDisplay display, Vector3f scale) {
-        // Устанавливаем масштаб текста используя внутренние методы
+    private void setTextScale(Display display, Vector3f scale) {
         Matrix4f transformationMatrix = new Matrix4f().scaling(scale.x, scale.y, scale.z);
         display.setTransformationMatrix(transformationMatrix);
     }
@@ -200,10 +262,16 @@ public class Hologram implements Listener {
         for (TextDisplay display : displays) {
             player.showEntity(plugin, display);
         }
+        for (ItemDisplay display : itemDisplays) {
+            player.showEntity(plugin, display);
+        }
     }
 
     private void hideDisplays(Player player) {
         for (TextDisplay display : displays) {
+            player.hideEntity(plugin, display);
+        }
+        for (ItemDisplay display : itemDisplays) {
             player.hideEntity(plugin, display);
         }
     }
@@ -212,26 +280,21 @@ public class Hologram implements Listener {
         for (TextDisplay display : displays) {
             display.remove();
         }
+        for (ItemDisplay display : itemDisplays) {
+            display.remove();
+        }
     }
 
     public String getName() {
         return name;
     }
 
-    public List<String> getLines() {
+    public List<Line> getLines() {
         return lines;
     }
 
     public double getVisibilityDistance() {
         return visibilityDistance;
-    }
-
-    public double getLineSpacing() {
-        return lineSpacing;
-    }
-
-    public String getBackgroundColor() {
-        return backgroundColor;
     }
 
     public int getBrightness() {
@@ -241,32 +304,6 @@ public class Hologram implements Listener {
     public Location getLocation() {
         return location;
     }
-
-    public String getBillboardType() {
-        return billboardType;
-    }
-
-    public Vector3f getScale() {
-        return scale;
-    }
-
-    public void setScale(Vector3f scale) {
-        if (!Objects.equals(this.scale, scale)) {
-            this.scale = scale;
-            for (TextDisplay display : displays) {
-                setTextScale(display, scale);
-            }
-        }
-    }
-
-    public boolean hasTextShadow() {
-        return textShadow;
-    }
-
-    private void setTextShadow(TextDisplay display, boolean shadow) {
-        display.setShadowed(shadow);
-    }
-
 
     private void setBackgroundColorWithAlpha(TextDisplay display, String colorName) {
         Color color;
@@ -290,7 +327,11 @@ public class Hologram implements Listener {
             case "silver" -> Color.SILVER;
             case "purple" -> Color.PURPLE;
             case "none" -> null;
-            default -> null; // No background color
+            default -> null; // без цвета
         };
+    }
+
+    public record Line(String content, double lineSpacing, String backgroundColor, String billboardType, Vector3f scale,
+                       boolean textShadow, String textType) {
     }
 }

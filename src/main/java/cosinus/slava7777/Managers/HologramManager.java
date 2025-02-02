@@ -8,52 +8,61 @@ import org.bukkit.event.Listener;
 import org.joml.Vector3f;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
+@SuppressWarnings("unused")
 public class HologramManager implements Listener {
 
     private final CosHolograms plugin;
-    private final List<Hologram> holograms;
+    private final Map<String, Hologram> holograms;
 
     public HologramManager(CosHolograms plugin) {
         this.plugin = plugin;
-        this.holograms = new ArrayList<>();
+        this.holograms = new HashMap<>();
     }
 
     public void createHologram(String name, Location location) {
-        List<String> defaultLines = List.of("&aDefault line");
+        List<Hologram.Line> defaultLines = List.of(
+                new Hologram.Line("&aDefault line",
+                        0.1,
+                        "none",
+                        "fixed",
+                        new Vector3f(1.0f, 1.0f, 1.0f),
+                        false,
+                        "center")
+        );
         double defaultVisibilityDistance = 30;
-        double defaultLineSpacing = 0.1;
-        String defaultBackgroundColor = "none";
         int defaultBrightness = 15;
-        String defaultBillboardType = "fixed";
-        Vector3f defaultScale = new Vector3f(1.0f, 1.0f, 1.0f);
-        boolean defaultTextShadow = false;
-        String defaultTextType = "center";
 
-        Hologram hologram = new Hologram(plugin, name, location, defaultLines, defaultVisibilityDistance, defaultLineSpacing, defaultBackgroundColor, defaultBrightness, defaultBillboardType,  defaultScale, defaultTextShadow, defaultTextType);
-        holograms.add(hologram);
+        Hologram hologram = new Hologram(plugin, name, location, defaultLines, defaultVisibilityDistance, defaultBrightness);
+        holograms.put(name, hologram);
         new HologramConfig(plugin).saveHolograms();
     }
 
     public void removeHologram(Hologram hologram) {
         hologram.remove();
-        holograms.remove(hologram);
+        holograms.remove(hologram.getName());
         new HologramConfig(plugin).saveHolograms();
     }
 
-    public List<Hologram> getHolograms() {
+    public Hologram getHologramByName(String name) {
+        return holograms.get(name);
+    }
+
+    public Map<String, Hologram> getHolograms() {
         return holograms;
     }
 
     public void addHologram(Hologram hologram) {
-        holograms.add(hologram);
+        holograms.put(hologram.getName(), hologram);
     }
 
     public void removeAllHolograms() {
-        for (Hologram hologram : new ArrayList<>(holograms)) {
+        for (Hologram hologram : new ArrayList<>(holograms.values())) {
             hologram.remove();
-            holograms.remove(hologram);
+            holograms.remove(hologram.getName());
         }
     }
 }
